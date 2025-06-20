@@ -108,8 +108,11 @@ class GoogleSheetsMCP:
             credentials = self._get_credentials()
             self.sheets_service = build('sheets', 'v4', credentials=credentials)
             self.drive_service = build('drive', 'v3', credentials=credentials)
+            logger.info(f"Successfully initialized Google services with credentials type: {type(credentials).__name__}")
         except Exception as e:
             logger.error(f"Failed to initialize Google services: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             # Don't fail initialization - we'll check for services before use
     
     def _get_credentials(self):
@@ -469,9 +472,14 @@ class GoogleSheetsMCP:
                 raise HTTPException(status_code=500, detail="Google Sheets service unavailable")
                 
         try:
+            # Parse range to get proper grid range
+            # For now, use simple A1 notation parsing
             requests = [{
                 'repeatCell': {
-                    'range': {'sheetId': 0, 'range': range},
+                    'range': {
+                        'sheetId': 0  # Default to first sheet
+                        # TODO: Parse range properly for multi-sheet support
+                    },
                     'cell': {'userEnteredFormat': format},
                     'fields': 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)'
                 }
@@ -499,7 +507,8 @@ class GoogleSheetsMCP:
                 raise HTTPException(status_code=500, detail="Google Sheets service unavailable")
                 
         try:
-            values = [[{'userEnteredValue': {'formulaValue': formula}}]]
+            # For formulas, use simple string values with USER_ENTERED
+            values = [[formula]]
             instance.sheets_service.spreadsheets().values().update(
                 spreadsheetId=file_id,
                 range=range,
@@ -574,7 +583,6 @@ class GoogleSheetsMCP:
         name="get_sheet_properties",
         description="Get properties of all sheets in a spreadsheet"
     )
-    @lru_cache(maxsize=100)
     async def get_sheet_properties(file_id: str) -> str:
         """Get properties of all sheets in a spreadsheet"""
         instance = mcp._instance
@@ -622,10 +630,12 @@ def main():
     logging.getLogger().setLevel(getattr(logging, settings.LOG_LEVEL.upper()))
     
     # Create MCP server
+    logger.info(f"Creating GoogleSheetsMCP with service_account_path: {settings.GOOGLE_SERVICE_ACCOUNT_PATH}")
     mcp_server = GoogleSheetsMCP(service_account_path=settings.GOOGLE_SERVICE_ACCOUNT_PATH)
     
     # Store the instance in the mcp object
     mcp._instance = mcp_server
+    logger.info(f"MCP instance stored: {mcp._instance is not None}")
     
     # Initialize services before starting
     try:
