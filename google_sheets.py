@@ -601,6 +601,727 @@ class GoogleSheetsMCP:
             logger.error(f"Error getting sheet properties: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
 
+    async def _read_range_impl(
+        self,
+        file_id: str,
+        range: str,
+        value_render_option: str = "FORMATTED_VALUE",
+        date_time_render_option: str = "FORMATTED_STRING"
+    ) -> str:
+        """
+        Read data from a specific range in a Google Sheet (internal implementation)
+        
+        Args:
+            file_id: The ID of the Google Sheet
+            range: The A1 notation range to read (e.g., "A1:B10", "Sheet1!A1:C5")
+            value_render_option: How values should be represented in the output.
+                                Options: FORMATTED_VALUE, UNFORMATTED_VALUE, FORMULA
+            date_time_render_option: How dates should be represented in the output.
+                                    Options: SERIAL_NUMBER, FORMATTED_STRING
+        
+        Returns:
+            JSON string containing the values and range information
+        """
+        if not self.sheets_service:
+            self._initialize_services()
+            if not self.sheets_service:
+                raise GoogleSheetsError("Google Sheets service unavailable")
+        
+        try:
+            # Call the Google Sheets API
+            result = self.sheets_service.spreadsheets().values().get(
+                spreadsheetId=file_id,
+                range=range,
+                valueRenderOption=value_render_option,
+                dateTimeRenderOption=date_time_render_option
+            ).execute()
+            
+            # Extract values and range from the result
+            values = result.get('values', [])
+            actual_range = result.get('range', range)
+            
+            # Return the data as a JSON string
+            return json.dumps({
+                'values': values,
+                'range': actual_range
+            })
+            
+        except HttpError as error:
+            if error.resp.status == 404:
+                raise SheetNotFoundError(f"Sheet with ID {file_id} not found")
+            elif error.resp.status == 400:
+                raise GoogleSheetsError(f"Invalid range: {range}")
+            else:
+                logger.error(f"Google API error: {str(error)}")
+                raise GoogleSheetsError(f"API Error: {error.resp.status} - {str(error)}")
+        except Exception as e:
+            logger.error(f"Error reading range: {str(e)}")
+            raise GoogleSheetsError(f"Failed to read range: {str(e)}")
+
+    @staticmethod
+    @mcp.tool(
+        name="read_range",
+        description="Read data from a specific range in a Google Sheet"
+    )
+    async def read_range(
+        file_id: str,
+        range: str,
+        value_render_option: Optional[str] = None,
+        date_time_render_option: Optional[str] = None
+    ) -> str:
+        """
+        Read data from a specific range in a Google Sheet (MCP handler)
+        
+        Args:
+            file_id: The ID of the Google Sheet
+            range: The A1 notation range to read (e.g., "A1:B10", "Sheet1!A1:C5")
+            value_render_option: How values should be represented (FORMATTED_VALUE, UNFORMATTED_VALUE, FORMULA)
+            date_time_render_option: How dates should be represented (SERIAL_NUMBER, FORMATTED_STRING)
+        
+        Returns:
+            JSON string containing the values and range information
+        """
+        instance = mcp._instance
+        if not instance:
+            raise HTTPException(status_code=500, detail="MCP instance not initialized")
+        
+        # Use default values if not provided
+        value_render = value_render_option or "FORMATTED_VALUE"
+        date_time_render = date_time_render_option or "FORMATTED_STRING"
+        
+        # Delegate to the instance method
+        return await instance._read_range_impl(
+            file_id=file_id,
+            range=range,
+            value_render_option=value_render,
+            date_time_render_option=date_time_render
+        )
+
+    async def _get_values_impl(
+        self,
+        file_id: str,
+        ranges: Union[str, List[str]],
+        value_render_option: str = "FORMATTED_VALUE",
+        date_time_render_option: str = "FORMATTED_STRING"
+    ) -> str:
+        """
+        Get values from multiple ranges in a Google Sheet using batch API
+        
+        Args:
+            file_id: The ID of the Google Sheet
+            ranges: Single range string or list of ranges in A1 notation
+            value_render_option: How values should be represented in the output.
+                                Options: FORMATTED_VALUE, UNFORMATTED_VALUE, FORMULA
+            date_time_render_option: How dates should be represented in the output.
+                                    Options: SERIAL_NUMBER, FORMATTED_STRING
+        
+        Returns:
+            JSON string containing the spreadsheet ID and value ranges
+        """
+        if not self.sheets_service:
+            self._initialize_services()
+            if not self.sheets_service:
+                raise GoogleSheetsError("Google Sheets service unavailable")
+        
+        try:
+            # Normalize ranges to always be a list
+            if isinstance(ranges, str):
+                ranges_list = [ranges]
+            else:
+                ranges_list = ranges
+            
+            # Call the Google Sheets batch get API
+            result = self.sheets_service.spreadsheets().values().batchGet(
+                spreadsheetId=file_id,
+                ranges=ranges_list,
+                valueRenderOption=value_render_option,
+                dateTimeRenderOption=date_time_render_option
+            ).execute()
+            
+            # Return the full result as JSON
+            # This includes spreadsheetId and valueRanges array
+            return json.dumps(result)
+            
+        except HttpError as error:
+            if error.resp.status == 404:
+                raise SheetNotFoundError(f"Sheet with ID {file_id} not found")
+            elif error.resp.status == 400:
+                raise GoogleSheetsError(f"Invalid range(s): {ranges}")
+            else:
+                logger.error(f"Google API error: {str(error)}")
+                raise GoogleSheetsError(f"API Error: {error.resp.status} - {str(error)}")
+        except Exception as e:
+            logger.error(f"Error getting values: {str(e)}")
+            raise GoogleSheetsError(f"Failed to get values: {str(e)}")
+
+    @staticmethod
+    @mcp.tool(
+        name="get_values",
+        description="Get values from multiple ranges in a Google Sheet using batch API"
+    )
+    async def get_values(
+        file_id: str,
+        ranges: Union[str, List[str]],
+        value_render_option: Optional[str] = None,
+        date_time_render_option: Optional[str] = None
+    ) -> str:
+        """
+        Get values from multiple ranges in a Google Sheet (MCP handler)
+        
+        Args:
+            file_id: The ID of the Google Sheet
+            ranges: Single range string or list of ranges in A1 notation
+            value_render_option: How values should be represented (FORMATTED_VALUE, UNFORMATTED_VALUE, FORMULA)
+            date_time_render_option: How dates should be represented (SERIAL_NUMBER, FORMATTED_STRING)
+        
+        Returns:
+            JSON string containing the spreadsheet ID and value ranges
+        """
+        instance = mcp._instance
+        if not instance:
+            raise HTTPException(status_code=500, detail="MCP instance not initialized")
+        
+        # Use default values if not provided
+        value_render = value_render_option or "FORMATTED_VALUE"
+        date_time_render = date_time_render_option or "FORMATTED_STRING"
+        
+        # Delegate to the instance method
+        return await instance._get_values_impl(
+            file_id=file_id,
+            ranges=ranges,
+            value_render_option=value_render,
+            date_time_render_option=date_time_render
+        )
+
+    async def _append_rows_impl(
+        self,
+        file_id: str,
+        range: str,
+        values: List[List[Any]],
+        value_input_option: str = "USER_ENTERED",
+        insert_data_option: str = "OVERWRITE"
+    ) -> str:
+        """
+        Append rows to the end of existing data in a Google Sheet (internal implementation)
+        
+        Args:
+            file_id: The ID of the Google Sheet
+            range: The A1 notation range to append to (e.g., "Sheet1", "Sheet1!A:C")
+            values: 2D array of values to append
+            value_input_option: How the input data should be interpreted.
+                               Options: RAW, USER_ENTERED (default)
+            insert_data_option: How the input data should be inserted.
+                               Options: OVERWRITE (default), INSERT_ROWS
+        
+        Returns:
+            JSON string containing the update information
+        """
+        if not self.sheets_service:
+            self._initialize_services()
+            if not self.sheets_service:
+                raise GoogleSheetsError("Google Sheets service unavailable")
+        
+        # Validate inputs
+        if not file_id:
+            raise ValueError("file_id is required")
+        if not range:
+            raise ValueError("range is required")
+        if values is None:
+            raise ValueError("values is required")
+        if isinstance(values, list) and len(values) == 0:
+            raise ValueError("values cannot be empty")
+        
+        # Validate value_input_option
+        valid_input_options = ["RAW", "USER_ENTERED"]
+        if value_input_option not in valid_input_options:
+            raise ValueError(f"Invalid value_input_option: {value_input_option}. Must be one of {valid_input_options}")
+        
+        # Validate insert_data_option
+        valid_insert_options = ["OVERWRITE", "INSERT_ROWS"]
+        if insert_data_option not in valid_insert_options:
+            raise ValueError(f"Invalid insert_data_option: {insert_data_option}. Must be one of {valid_insert_options}")
+        
+        try:
+            # Convert all values to strings/proper format
+            formatted_values = []
+            for row in values:
+                formatted_row = []
+                for cell in row:
+                    if cell is None:
+                        formatted_row.append("")
+                    elif isinstance(cell, bool):
+                        formatted_row.append(str(cell).upper())
+                    else:
+                        formatted_row.append(str(cell))
+                formatted_values.append(formatted_row)
+            
+            # Use the append API which automatically finds the end of data
+            body = {
+                "values": formatted_values
+            }
+            
+            result = self.sheets_service.spreadsheets().values().append(
+                spreadsheetId=file_id,
+                range=range,
+                valueInputOption=value_input_option,
+                insertDataOption=insert_data_option,
+                body=body
+            ).execute()
+            
+            # Extract update information
+            updates = result.get('updates', {})
+            
+            return json.dumps({
+                "spreadsheetId": result.get('spreadsheetId', file_id),
+                "updatedRange": updates.get('updatedRange', ''),
+                "updatedRows": updates.get('updatedRows', 0),
+                "updatedColumns": updates.get('updatedColumns', 0),
+                "updatedCells": updates.get('updatedCells', 0)
+            })
+            
+        except HttpError as error:
+            if error.resp.status == 404:
+                raise SheetNotFoundError(f"Sheet with ID {file_id} not found")
+            elif error.resp.status == 400:
+                raise GoogleSheetsError(f"Invalid range or data: {range}")
+            else:
+                logger.error(f"Google API error: {str(error)}")
+                raise GoogleSheetsError(f"API Error: {error.resp.status} - {str(error)}")
+        except Exception as e:
+            logger.error(f"Error appending rows: {str(e)}")
+            raise
+
+    @staticmethod
+    @mcp.tool(
+        name="append_rows",
+        description="Append rows to the end of existing data in a Google Sheet"
+    )
+    async def append_rows(
+        file_id: str,
+        range: str,
+        values: List[List[Any]],
+        value_input_option: Optional[str] = None,
+        insert_data_option: Optional[str] = None
+    ) -> str:
+        """
+        Append rows to the end of existing data in a Google Sheet (MCP handler)
+        
+        Args:
+            file_id: The ID of the Google Sheet
+            range: The A1 notation range to append to (e.g., "Sheet1", "Sheet1!A:C")
+            values: 2D array of values to append
+            value_input_option: How the input data should be interpreted (RAW, USER_ENTERED)
+            insert_data_option: How the input data should be inserted (OVERWRITE, INSERT_ROWS)
+        
+        Returns:
+            JSON string containing the update information
+        """
+        instance = mcp._instance
+        if not instance:
+            raise HTTPException(status_code=500, detail="MCP instance not initialized")
+        
+        # Use default values if not provided
+        value_input = value_input_option or "USER_ENTERED"
+        insert_data = insert_data_option or "OVERWRITE"
+        
+        # Delegate to the instance method
+        return await instance._append_rows_impl(
+            file_id=file_id,
+            range=range,
+            values=values,
+            value_input_option=value_input,
+            insert_data_option=insert_data
+        )
+
+    async def _update_range_impl(
+        self,
+        file_id: str,
+        range: str,
+        values: List[List[Any]],
+        value_input_option: str = "USER_ENTERED"
+    ) -> Dict[str, Any]:
+        """
+        Update a specific range in a Google Sheet with new values (internal implementation)
+        
+        Args:
+            file_id: The ID of the Google Sheet
+            range: The A1 notation range to update (e.g., "A1:B10", "Sheet1!A1:C5")
+            values: 2D array of values to write
+            value_input_option: How the input data should be interpreted.
+                               Options: RAW, USER_ENTERED (default)
+        
+        Returns:
+            Dictionary containing the update information
+        """
+        if not self.sheets_service:
+            self._initialize_services()
+            if not self.sheets_service:
+                raise GoogleSheetsError("Google Sheets service unavailable")
+        
+        # Validate inputs
+        if not file_id:
+            raise ValueError("file_id is required")
+        if not range:
+            raise ValueError("range is required")
+        if values is None:
+            raise ValueError("values is required")
+        if isinstance(values, list) and len(values) == 0:
+            raise ValueError("Values array cannot be empty")
+        
+        # Validate that all rows have content
+        for i, row in enumerate(values):
+            if isinstance(row, list) and len(row) == 0:
+                raise ValueError("Values array cannot contain empty rows")
+        
+        # Validate consistent column count
+        if values:
+            expected_cols = len(values[0])
+            for i, row in enumerate(values):
+                if len(row) != expected_cols:
+                    raise ValueError("All rows must have the same number of columns")
+        
+        # Validate value_input_option
+        valid_input_options = ["RAW", "USER_ENTERED"]
+        if value_input_option not in valid_input_options:
+            raise ValueError(f"Invalid value_input_option: {value_input_option}. Must be one of {valid_input_options}")
+        
+        try:
+            # Convert all values to appropriate format for the API
+            formatted_values = []
+            for row in values:
+                formatted_row = []
+                for cell in row:
+                    if cell is None:
+                        formatted_row.append("")
+                    elif isinstance(cell, bool):
+                        formatted_row.append(str(cell).upper())
+                    else:
+                        formatted_row.append(str(cell))
+                formatted_values.append(formatted_row)
+            
+            # Prepare the request body
+            body = {
+                "values": formatted_values
+            }
+            
+            # Call the Google Sheets API to update the range
+            result = self.sheets_service.spreadsheets().values().update(
+                spreadsheetId=file_id,
+                range=range,
+                valueInputOption=value_input_option,
+                body=body
+            ).execute()
+            
+            # Return the result dictionary
+            return {
+                "spreadsheetId": result.get('spreadsheetId', file_id),
+                "updatedRange": result.get('updatedRange', ''),
+                "updatedRows": result.get('updatedRows', 0),
+                "updatedColumns": result.get('updatedColumns', 0),
+                "updatedCells": result.get('updatedCells', 0)
+            }
+            
+        except HttpError as error:
+            if error.resp.status == 404:
+                raise SheetNotFoundError(f"Sheet with ID {file_id} not found")
+            elif error.resp.status == 400:
+                raise GoogleSheetsError(f"Invalid range or data: {range}")
+            else:
+                logger.error(f"Google API error: {str(error)}")
+                raise GoogleSheetsError(f"API Error: {error.resp.status} - {str(error)}")
+        except Exception as e:
+            logger.error(f"Error updating range: {str(e)}")
+            raise
+
+    @staticmethod
+    @mcp.tool(
+        name="update_range", 
+        description="Update a specific range in a Google Sheet with new values"
+    )
+    async def update_range(
+        file_id: str,
+        range: str,
+        values: List[List[Any]],
+        value_input_option: Optional[str] = None
+    ) -> str:
+        """
+        Update a specific range in a Google Sheet with new values (MCP handler)
+        
+        Args:
+            file_id: The ID of the Google Sheet
+            range: The A1 notation range to update (e.g., "A1:B10", "Sheet1!A1:C5")
+            values: 2D array of values to write
+            value_input_option: How the input data should be interpreted (RAW, USER_ENTERED)
+        
+        Returns:
+            JSON string containing the update information
+        """
+        instance = mcp._instance
+        if not instance:
+            raise HTTPException(status_code=500, detail="MCP instance not initialized")
+        
+        # Use default value if not provided
+        value_input = value_input_option or "USER_ENTERED"
+        
+        # Delegate to the instance method
+        result = await instance._update_range_impl(
+            file_id=file_id,
+            range=range,
+            values=values,
+            value_input_option=value_input
+        )
+        
+        # Return as JSON string
+        return json.dumps(result)
+
+    async def _insert_rows_impl(
+        self,
+        file_id: str,
+        sheet_id: Optional[int] = None,
+        sheet_name: Optional[str] = None,
+        start_index: int = 0,
+        num_rows: int = 1,
+        values: Optional[List[List[Any]]] = None,
+        inherit_from_before: bool = False,
+        value_input_option: str = "USER_ENTERED",
+        range: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Insert rows at specific positions in a Google Sheet (internal implementation)
+        
+        Args:
+            file_id: The ID of the Google Sheet
+            sheet_id: The ID of the sheet (optional if sheet_name provided)
+            sheet_name: The name of the sheet (optional if sheet_id provided)
+            start_index: The index where to insert rows (0-based)
+            num_rows: Number of rows to insert
+            values: Optional 2D array of values to fill the inserted rows
+            inherit_from_before: Whether to inherit properties from the row before
+            value_input_option: How the input data should be interpreted (RAW, USER_ENTERED)
+            range: Optional specific range for placing values
+        
+        Returns:
+            Dictionary containing the insert operation information
+        """
+        if not self.sheets_service:
+            self._initialize_services()
+            if not self.sheets_service:
+                raise GoogleSheetsError("Google Sheets service unavailable")
+        
+        # Validate inputs
+        if not file_id:
+            raise ValueError("file_id is required")
+        if sheet_id is None and sheet_name is None:
+            raise ValueError("Either sheet_id or sheet_name must be provided")
+        if start_index < 0:
+            raise ValueError("start_index must be non-negative")
+        if num_rows <= 0:
+            raise ValueError("num_rows must be positive")
+        if values is not None and len(values) != num_rows:
+            raise ValueError(f"values list length ({len(values)}) does not match num_rows ({num_rows})")
+        
+        # Validate value_input_option
+        valid_input_options = ["RAW", "USER_ENTERED"]
+        if value_input_option not in valid_input_options:
+            raise ValueError(f"Invalid value_input_option: {value_input_option}. Must be one of {valid_input_options}")
+        
+        try:
+            # Resolve sheet_id from sheet_name if necessary
+            resolved_sheet_id = sheet_id
+            if sheet_name is not None and sheet_id is None:
+                # Get sheet properties to find the sheet ID
+                spreadsheet = self.sheets_service.spreadsheets().get(
+                    spreadsheetId=file_id,
+                    fields="sheets.properties"
+                ).execute()
+                
+                sheets = spreadsheet.get("sheets", [])
+                for sheet in sheets:
+                    if sheet["properties"]["title"] == sheet_name:
+                        resolved_sheet_id = sheet["properties"]["sheetId"]
+                        break
+                
+                if resolved_sheet_id is None:
+                    raise ValueError(f"Sheet '{sheet_name}' not found")
+            
+            # Prepare the insert dimension request
+            insert_request = {
+                "insertDimension": {
+                    "range": {
+                        "sheetId": resolved_sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": start_index,
+                        "endIndex": start_index + num_rows
+                    }
+                }
+            }
+            
+            # Add inheritFromBefore if specified
+            if inherit_from_before:
+                insert_request["insertDimension"]["inheritFromBefore"] = True
+            
+            # Execute the batch update to insert rows
+            batch_update_body = {
+                "requests": [insert_request]
+            }
+            
+            batch_result = self.sheets_service.spreadsheets().batchUpdate(
+                spreadsheetId=file_id,
+                body=batch_update_body
+            ).execute()
+            
+            # Prepare the result
+            result = {
+                "spreadsheetId": file_id,
+                "sheetId": resolved_sheet_id,
+                "insertedRows": num_rows,
+                "startIndex": start_index
+            }
+            
+            # If values are provided, update the newly inserted rows with data
+            if values is not None:
+                # Convert all values to appropriate format for the API
+                formatted_values = []
+                for row in values:
+                    formatted_row = []
+                    for cell in row:
+                        if cell is None:
+                            formatted_row.append("")
+                        elif isinstance(cell, bool):
+                            formatted_row.append(str(cell).upper())
+                        else:
+                            formatted_row.append(str(cell))
+                    formatted_values.append(formatted_row)
+                
+                # Determine the range for the values
+                if range is not None:
+                    update_range = range
+                else:
+                    # Calculate the range based on inserted rows
+                    if sheet_name:
+                        sheet_prefix = f"'{sheet_name}'"
+                    else:
+                        # Get sheet name for the range
+                        spreadsheet = self.sheets_service.spreadsheets().get(
+                            spreadsheetId=file_id,
+                            fields="sheets.properties"
+                        ).execute()
+                        sheet_title = "Sheet1"  # Default fallback
+                        for sheet in spreadsheet.get("sheets", []):
+                            if sheet["properties"]["sheetId"] == resolved_sheet_id:
+                                sheet_title = sheet["properties"]["title"]
+                                break
+                        sheet_prefix = f"'{sheet_title}'"
+                    
+                    # Calculate end column based on the width of the data
+                    max_cols = max(len(row) for row in values) if values else 1
+                    if max_cols <= 26:
+                        end_col = chr(ord('A') + max_cols - 1)
+                    else:
+                        # For columns beyond Z (26), use a simpler approach
+                        # This handles up to 702 columns (ZZ)
+                        if max_cols <= 702:
+                            first_letter = chr(ord('A') + (max_cols - 27) // 26)
+                            second_letter = chr(ord('A') + (max_cols - 27) % 26)
+                            end_col = first_letter + second_letter
+                        else:
+                            # Fallback for very wide ranges
+                            end_col = f"Z{max_cols}"
+                    
+                    # Use 1-based indexing for the range (API uses 0-based for insert, 1-based for ranges)
+                    update_range = f"{sheet_prefix}!A{start_index + 1}:{end_col}{start_index + num_rows}"
+                
+                # Update the values
+                values_body = {
+                    "values": formatted_values
+                }
+                
+                update_result = self.sheets_service.spreadsheets().values().update(
+                    spreadsheetId=file_id,
+                    range=update_range,
+                    valueInputOption=value_input_option,
+                    body=values_body
+                ).execute()
+                
+                # Add update information to the result
+                result.update({
+                    "updatedRange": update_result.get("updatedRange", ""),
+                    "updatedRows": update_result.get("updatedRows", 0),
+                    "updatedColumns": update_result.get("updatedColumns", 0),
+                    "updatedCells": update_result.get("updatedCells", 0)
+                })
+            
+            return result
+            
+        except HttpError as error:
+            if error.resp.status == 404:
+                raise SheetNotFoundError(f"Sheet with ID {file_id} not found")
+            elif error.resp.status == 400:
+                raise GoogleSheetsError(f"Invalid request parameters")
+            else:
+                logger.error(f"Google API error: {str(error)}")
+                raise GoogleSheetsError(f"API Error: {error.resp.status} - {str(error)}")
+        except Exception as e:
+            logger.error(f"Error inserting rows: {str(e)}")
+            raise
+
+    @staticmethod
+    @mcp.tool(
+        name="insert_rows",
+        description="Insert rows at specific positions in a Google Sheet, shifting existing data down"
+    )
+    async def insert_rows(
+        file_id: str,
+        sheet_id: Optional[int] = None,
+        sheet_name: Optional[str] = None,
+        start_index: int = 0,
+        num_rows: int = 1,
+        values: Optional[List[List[Any]]] = None,
+        inherit_from_before: Optional[bool] = None,
+        value_input_option: Optional[str] = None,
+        range: Optional[str] = None
+    ) -> str:
+        """
+        Insert rows at specific positions in a Google Sheet (MCP handler)
+        
+        Args:
+            file_id: The ID of the Google Sheet
+            sheet_id: The ID of the sheet (optional if sheet_name provided)
+            sheet_name: The name of the sheet (optional if sheet_id provided)
+            start_index: The index where to insert rows (0-based)
+            num_rows: Number of rows to insert
+            values: Optional 2D array of values to fill the inserted rows
+            inherit_from_before: Whether to inherit properties from the row before
+            value_input_option: How the input data should be interpreted (RAW, USER_ENTERED)
+            range: Optional specific range for placing values
+        
+        Returns:
+            JSON string containing the insert operation information
+        """
+        instance = mcp._instance
+        if not instance:
+            raise HTTPException(status_code=500, detail="MCP instance not initialized")
+        
+        # Use default values if not provided
+        inherit_before = inherit_from_before or False
+        value_input = value_input_option or "USER_ENTERED"
+        
+        # Delegate to the instance method
+        result = await instance._insert_rows_impl(
+            file_id=file_id,
+            sheet_id=sheet_id,
+            sheet_name=sheet_name,
+            start_index=start_index,
+            num_rows=num_rows,
+            values=values,
+            inherit_from_before=inherit_before,
+            value_input_option=value_input,
+            range=range
+        )
+        
+        # Return as JSON string
+        return json.dumps(result)
+
 def parse_args():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description="Google Sheets MCP Server")

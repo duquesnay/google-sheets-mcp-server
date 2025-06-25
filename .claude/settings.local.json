@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl:*)",
+      "Bash(grep:*)",
+      "Bash(sed:*)",
+      "Bash(ls:*)",
+      "Bash(pip install:*)",
+      "Bash(source:*)",
+      "Bash(uv:*)",
+      "Bash(PYTHONPATH=/Users/guillaume/Dev/tools/mcp/google-sheets-mcp/google-sheets-mcp-server uv run pytest tests/test_read_range.py -v)",
+      "Bash(pytest:*)",
+      "Bash(touch:*)",
+      "Bash(rm:*)"
+    ],
+    "deny": []
+  }
+}
